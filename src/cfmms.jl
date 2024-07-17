@@ -1,4 +1,4 @@
-export CFMM, ProductTwoCoin, GeometricMeanTwoCoin, UniV3
+export CFMM, ProductTwoCoin, GeometricMeanTwoCoin, ExponentialTwoCoin, UniV3
 export find_arb!
 export update_reserves!
 
@@ -140,7 +140,7 @@ function find_arb!(Δ::VT, Λ::VT, cfmm::ProductTwoCoin{T}, v::VT) where {T, VT<
 end
 
 @doc raw"""
-    GeometricMeanTwoCoin(R, w, γ, idx)
+    ExponentialTwoCoin(R, w, γ, idx)
 
 Creates a two coin geometric mean CFMM with coins `idx[1]` and `idx[2]`, 
 reserves `R`, fee `γ`, and weights `w` such that `w[1] + w[2] == 1.0`.
@@ -152,7 +152,7 @@ Specifically, the invariant is
 struct GeometricMeanTwoCoin{T} <: CFMM{T}
     @add_two_coin_fields
     w::SVector{2,T}
-    function GeometricMeanTwoCoin(R, w, γ, idx)
+    function GeometricMeanTwoCoin(R, α, γ, idx)
         γ_T, idx_uint, T = two_coin_check_cast(R, γ, idx)
     
         return new{T}(
@@ -195,6 +195,63 @@ function find_arb!(Δ::VT, Λ::VT, cfmm::GeometricMeanTwoCoin{T}, v::VT) where {
     return nothing
 end
 
+@doc raw"""
+    ExponentialTwoCoin(R, lower_ticks, α, current_tick, current_price, liquidity, γ, idx)
+
+Creates a two coin exponential CFMM with coins `idx[1]` and `idx[2]`, 
+reserves `R`, fee `γ`, and exponent `α'.
+Specifically, the invariant is
+```math
+\varphi(R) = R_1 + lower_tick^α - (current_tick^{α-1}+R_2^{1-α/α})^{α/α-1}.
+```
+"""
+
+mutable struct ExponentialTwoCoin{T} <: CFMM{T}
+    current_price::T
+    current_tick::Int
+    lower_ticks::Vector{T}
+    liquidity::Vector{T}
+    γ::T
+    α::T
+    Ai::Vector{Int}
+    function ExponentialTwoCoin(current_price, lower_ticks, liquidity, γ, α, Ai)
+        T = eltype(lower_ticks)
+        current_tick = searchsortedlast(lower_ticks, current_price, rev=true)
+        return new{T}(
+            current_price,
+            current_tick,
+            lower_ticks,
+            liquidity,
+            γ,
+            α,
+            Ai
+        )
+    end
+end
+
+# Initialize a zero trade vector of type T and length 2
+zerotrade(c::ExponentialTwoCoin{T}) where T = zeros(T, 2)
+
+# Returns the higher price of interval idx
+tick_high_price(cfmm::ExponentialTwoCoin{T}, idx) where T = cfmm.lower_ticks[idx]
+
+# Returns the lower price of interval idx
+function tick_low_price(cfmm::ExponentialTwoCoin{T}, idx) where T
+    if idx < length(cfmm.lower_ticks)
+        return cfmm.lower_ticks[idx + 1]
+    end
+    return zero(T)
+end
+
+# Returns the exponent of interval idx
+function tick_low_exponent(cfmm::ExponentialTwoCoin{T}, idx) where T
+    if idx <= length(cfmm.lower_ticks)
+        return cfmm.lower_ticks[idx] ^ cfmm.α
+    end
+    return zero(T)
+end
+
+# Returns the exponent of the interval idx 
 
 #The price in each tick refers to the lower bound on the interval
 #so the intervals are [t_i,t_i+1] with liquidity L_i
