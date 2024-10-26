@@ -1,4 +1,4 @@
-export CFMM, ProductTwoCoin, GeometricMeanTwoCoin, UniV3
+export CFMM, ProductTwoCoin, GeometricMeanTwoCoin, UniV3, RMM01TwoCoin
 export find_arb!
 export update_reserves!
 
@@ -447,3 +447,64 @@ function forward_trade(Δ, cfmm::UniV3{T}) where T
         return trade_through_pools(γ*Δ[2], flip_sides.(get_lower_pools(cfmm)))
     end
 end
+
+@doc raw"""
+    RMM01TwoCoin(R, σ, τ, γ, idx)
+
+Creates a two coin RMM-01 CFMM with coins `idx[1]` and `idx[2]`, reserves `R`,
+volatility `σ`, time to expiry `τ`, and fee `γ`. Specifically, the invariant is
+```math
+\varphi(R) = R_1 + R_2 - \sigma \sqrt{\tau} \sqrt{R_1 R_2}.
+```
+"""
+struct RMM01TwoCoin{T} <: CFMM{T}
+    @add_two_coin_fields
+    σ::T
+    τ::T
+    function RMM01TwoCoin(R, σ, τ, γ, idx)
+        γ_T, idx_uint, T = two_coin_check_cast(R, γ, idx)
+        return new{T}(
+            MVector{2,T}(R),
+            γ_T,
+            MVector{2,UInt}(idx_uint),
+            T(σ),
+            T(τ)
+        )
+    end
+end
+
+function ϕ(cfmm::RMM01TwoCoin; R=nothing)
+    R = isnothing(R) ? cfmm.R : R
+    return R[1] + R[2] - cfmm.σ * sqrt(cfmm.τ) * sqrt(R[1] * R[2])
+end
+
+function ∇ϕ!(R⁺, cfmm::RMM01TwoCoin; R=nothing)
+    R = isnothing(R) ? cfmm.R : R
+    σ_sqrt_τ = cfmm.σ * sqrt(cfmm.τ)
+    sqrt_R1R2 = sqrt(R[1] * R[2])
+    R⁺[1] = 1 - 0.5 * σ_sqrt_τ * sqrt(R[2] / R[1])
+    R⁺[2] = 1 - 0.5 * σ_sqrt_τ * sqrt(R[1] / R[2])
+    return nothing
+end
+
+# Helper function for RMM-01 arbitrage calculations
+function rmm01_arb_δλ(m, r1, r2, σ, τ, γ)
+    a = γ * m
+    b = 1 - 0.25 * σ^2 * τ
+    c = r1 + r2 - σ * sqrt(τ * r1 * r2)
+    
+    δ = (sqrt(a * (a * r2^2 + 4 * b * c * r2)) - a * r2) / (2 * b * γ)
+    λ = r1 - sqrt((r1 + γ * δ) * (r2 - c / (r1 + γ * δ)))
+    
+    return max(δ, 0), max(λ, 0)
+end
+
+function find_arb!(Δ::VT, Λ::VT, cfmm::RMM01TwoCoin{T}, v::VT) where {T, VT<:AbstractVector{T}}
+    R, γ, σ, τ = cfmm.R, cfmm.γ, cfmm.σ, cfmm.τ
+
+    Δ[1], Λ[1] = rmm01_arb_δλ(v[2]/v[1], R[1], R[2], σ, τ, γ)
+    Δ[2], Λ[2] = rmm01_arb_δλ(v[1]/v[2], R[2], R[1], σ, τ, γ)
+
+    return nothing
+end
+

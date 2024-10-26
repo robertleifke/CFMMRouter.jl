@@ -37,6 +37,17 @@ Returns a vector with length `length(v)` (number of tokens).
 """
 function upper_limit end
 
+@doc raw"""
+    time_to_expiry(obj::Objective)
+
+Returns the time until the objective expires (τ), in seconds.
+Returns `Inf` if the objective does not expire.
+"""
+function time_to_expiry end
+
+# Add default implementation for Objective
+time_to_expiry(obj::Objective) = Inf
+
 # ----- Objective definitions below
 
 @doc raw"""
@@ -50,14 +61,14 @@ where `c` is a positive price vector.
 """
 struct LinearNonnegative{T} <: Objective
     c::AbstractVector{T}
-    function LinearNonnegative(c::Vector{T}) where {T<:AbstractFloat}
+    τ::T
+    function LinearNonnegative(c::Vector{T}, τ::T=Inf) where {T<:AbstractFloat}
         all(c .> 0) || throw(ArgumentError("all elements must be strictly positive"))
-        return new{T}(
-            c,
-        )
+        τ > 0 || throw(ArgumentError("τ must be positive"))
+        return new{T}(c, τ)
     end
 end
-LinearNonnegative(c::Vector{T}) where {T<:Real} = LinearNonnegative(Float64.(c))
+LinearNonnegative(c::Vector{T}, τ::Real=Inf) where {T<:Real} = LinearNonnegative(Float64.(c), Float64(τ))
 
 function f(obj::LinearNonnegative{T}, v) where {T}
     if all(obj.c .<= v)
@@ -78,6 +89,8 @@ end
 @inline lower_limit(o::LinearNonnegative{T}) where {T} = o.c .+ 1e-8
 @inline upper_limit(o::LinearNonnegative{T}) where {T} = convert(T, Inf) .+ zero(o.c)
 
+time_to_expiry(obj::LinearNonnegative) = obj.τ
+
 
 
 @doc raw"""
@@ -92,16 +105,15 @@ where `i` is the desired output token and `Δin` is the basket of tokens to be l
 struct BasketLiquidation{T} <: Objective
     i::Int
     Δin::Vector{T}
+    τ::T
     
-    function BasketLiquidation(i::Integer, Δin::Vector{T}) where {T<:AbstractFloat}
+    function BasketLiquidation(i::Integer, Δin::Vector{T}, τ::T=Inf) where {T<:AbstractFloat}
         !(i > 0 && i <= length(Δin)) && throw(ArgumentError("Invalid index i"))
-        return new{T}(
-            i,
-            Δin,
-        )
+        τ > 0 || throw(ArgumentError("τ must be positive"))
+        return new{T}(i, Δin, τ)
     end
 end
-BasketLiquidation(i::Integer, Δin::Vector{T}) where {T<:Real} = BasketLiquidation(i, Float64.(Δin))
+BasketLiquidation(i::Integer, Δin::Vector{T}, τ::Real=Inf) where {T<:Real} = BasketLiquidation(i, Float64.(Δin), Float64(τ))
 
 function f(obj::BasketLiquidation{T}, v) where {T}
     if v[obj.i] >= 1.0
@@ -128,6 +140,8 @@ end
 end
 @inline upper_limit(o::BasketLiquidation{T}) where {T} = convert(T, Inf) .+ zero(o.Δin)
 
+time_to_expiry(obj::BasketLiquidation) = obj.τ
+
 
 @doc raw"""
     Swap(i, j, δ, n)
@@ -139,8 +153,8 @@ Swap objective for the routing problem with `n` tokens:
 where `i` is the desired output token, `j` is the input token, and `δ` the amount input.
 Note that this is shorthand for a BasketLiquidation objective where `Δin` is a one-hot vector. 
 """
-function Swap(i::Int, j::Int, δ::T, n::Int) where {T<:AbstractFloat}
+function Swap(i::Int, j::Int, δ::T, n::Int, τ::T=Inf) where {T<:AbstractFloat}
     Δin = zeros(T, n)
     Δin[j] = δ
-    return BasketLiquidation(i, Δin)
+    return BasketLiquidation(i, Δin, τ)
 end
